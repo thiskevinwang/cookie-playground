@@ -1,0 +1,8 @@
+{
+  "name": "primary",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch run --port 6660 index.ts"
+  }
+}

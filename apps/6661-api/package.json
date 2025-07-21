@@ -1,0 +1,8 @@
+{
+  "name": "api",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch run --port 6661 index.ts"
+  }
+}

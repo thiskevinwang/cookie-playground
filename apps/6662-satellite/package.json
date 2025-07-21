@@ -1,0 +1,8 @@
+{
+  "name": "satellite",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch run --port 6662 index.ts"
+  }
+}

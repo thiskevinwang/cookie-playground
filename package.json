@@ -1,0 +1,19 @@
+{
+  "name": "cookie-playground",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "bun --watch run --filter '*' --elide-lines=0 dev"
+  },
+  "dependencies": {
+    "hono": "^4.8.5"
+  }
+}
