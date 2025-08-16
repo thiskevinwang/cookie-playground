@@ -1,0 +1,13 @@
+services:
+  nginx:
+    build:
+      context: .
+      dockerfile: proxy/Dockerfile
+    container_name: cookie-playground-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    extra_hosts:
+      # Allow container to reach host network on macOS/Windows Docker Desktop
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

@@ -14,10 +14,11 @@
     "dev": "bun --watch run --filter '*' --elide-lines=0 dev",
     "certs:setup": "node scripts/certs.js setup",
     "certs:cleanup": "node scripts/certs.js cleanup",
-    "proxy": "node scripts/proxy.js"
+    "nginx:up": "docker compose up -d nginx",
+    "nginx:down": "docker compose down",
+    "nginx:logs": "docker compose logs -f nginx"
   },
   "dependencies": {
-    "hono": "^4.8.5",
-    "http-proxy": "^1.18.1"
+    "hono": "^4.8.5"
   }
 }
