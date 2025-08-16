@@ -1,122 +1,91 @@
 import { Hono } from "hono";
-
-import { setCookie, getCookie } from "hono/cookie";
-import { html, raw } from "hono/html";
+import { getCookie } from "hono/cookie";
+import { html } from "hono/html";
+import { KVTable } from "../shared/ui.ts";
+import {
+  parseCookieDirectives,
+  renderSetCookiePreview,
+  setCookieMap,
+} from "../shared/cookies.ts";
+import { getConfig, cookieHostsForApp } from "../shared/config.ts";
 
 const app = new Hono();
 
-const cookieMap = {
-  a: "Domain=primary.local; SameSite=lax",
-  b: "Domain=primary.local; SameSite=none",
-  c: "Domain=primary.local; SameSite=strict", // won't get set unless secure is true
-  d: "Domain=.primary.local; SameSite=lax",
-  e: "Domain=.primary.local; SameSite=none",
-  f: "Domain=.primary.local; SameSite=strict", // won't get set unless secure is true
-} as const;
-
-type SameSiteOpt = "lax" | "none" | "strict" | undefined;
-
-const parseCookieDirectives = (
-  value: string
-): { domain?: string; sameSite?: SameSiteOpt } => {
-  const domain = /Domain=([^;]+)/i.exec(value)?.[1]?.trim();
-  const sameSite = /SameSite=([^;]+)/i
-    .exec(value)?.[1]
-    ?.trim()
-    .toLowerCase() as SameSiteOpt;
-  return { domain, sameSite };
-};
-
-// Proxyman-like key/value viewer: compact rows, fixed key column, subtle borders
-const KVTable = (data: Record<string, string>) => html`
-  <div
-    class="border border-neutral-200 rounded-md overflow-hidden bg-white shadow-sm"
-  >
-    <div
-      class="grid grid-cols-[220px_1fr] items-center gap-3 px-3 py-2 bg-neutral-50 text-neutral-500 text-[11px] uppercase tracking-wide"
-    >
-      <div>Key</div>
-      <div>Value</div>
-    </div>
-
-    <div class="divide-y divide-neutral-200 text-xs font-mono leading-relaxed">
-      ${Object.entries(data).map(
-        ([key, value]) => html`
-          <div
-            class="grid grid-cols-[220px_1fr] items-start gap-3 px-3 py-2 hover:bg-neutral-50"
-          >
-            <div class="text-neutral-600 whitespace-nowrap">${raw(key)}</div>
-            <div class="text-neutral-900 break-words whitespace-pre-wrap">
-              ${raw(value)}
-            </div>
-          </div>
-        `
-      )}
-    </div>
-  </div>
-`;
+// Build cookie directives dynamically from config
+function buildCookieMap(hosts: string[]) {
+  const map: Record<string, string> = {};
+  const labels: Array<"lax" | "none" | "strict"> = ["lax", "none", "strict"];
+  let idx = 0;
+  for (const host of hosts) {
+    const domainVariants = [host, `.${host}`];
+    for (const domain of domainVariants) {
+      for (const sameSite of labels) {
+        const key = String.fromCharCode(97 + idx); // a,b,c...
+        map[key] = `Domain=${domain}; SameSite=${sameSite}`;
+        idx++;
+      }
+    }
+  }
+  return map;
+}
 
 app.get("/", (c) => {
+  const cfg = getConfig(c, "primary");
+  const hostsForCookies = cookieHostsForApp(cfg);
+  const cookieMap = buildCookieMap(hostsForCookies);
   const reqHeaders = c.req.header();
   const reqCookies = getCookie(c);
 
-  Object.entries(cookieMap).forEach(([key, value]) => {
-    const { domain, sameSite } = parseCookieDirectives(value);
-    setCookie(c, key, `(from primary.local) ${value}`, {
-      domain,
-      httpOnly: true,
-      sameSite,
-      secure: true,
-      expires: new Date(Date.now() + 1000 * 60 * 60 * 24), // 1 day
-    });
+  setCookieMap(c, cookieMap, {
+    prefix: cfg.cookie.prefix,
+    secure: cfg.cookie.secure,
+    httpOnly: cfg.cookie.httpOnly,
+    ttlMs: cfg.cookie.ttlMs,
   });
 
   // Build a simple preview of the Set-Cookie response header lines (for the UI only)
-  const expireAt = new Date(Date.now() + 1000 * 60 * 60 * 24);
-  const setCookiePreview = Object.entries(cookieMap)
-    .map(([name, directives]) => {
-      const { domain, sameSite } = parseCookieDirectives(directives);
-      const parts = [
-        `${name}=${encodeURIComponent(`(from primary.local) ${directives}`)}`,
-        domain ? `Domain=${domain}` : undefined,
-        "Path=/",
-        sameSite ? `SameSite=${sameSite}` : undefined,
-        "HttpOnly",
-        "Secure",
-        `Expires=${expireAt.toUTCString()}`,
-      ].filter(Boolean);
-      return parts.join("; ");
-    })
-    .join("\n");
+  const setCookiePreview = renderSetCookiePreview(cookieMap, {
+    prefix: cfg.cookie.prefix,
+    secure: cfg.cookie.secure,
+    httpOnly: cfg.cookie.httpOnly,
+    ttlMs: cfg.cookie.ttlMs,
+  });
 
   return c.html(html`
     <head>
       <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     </head>
 
-    <body class="bg-emerald-50 p-4 space-y-3">
-      <div class="flex items-center justify-between">
-        <h1 class="text-emerald-600 text-2xl font-semibold">Primary</h1>
+    <body class="${cfg.accent.pageBg} p-4 space-y-3">
+      <div id="pageHeader" class="flex items-center justify-between">
+        <h1 class="${cfg.accent.text} text-2xl font-semibold">
+          ${cfg.currentHost}
+        </h1>
         <div class="flex gap-3 text-sm">
           <button
             onClick="location.reload()"
-            class="bg-emerald-500 text-white px-3 py-1 rounded hover:bg-emerald-600 transition"
+            class="${cfg.accent.button} text-white px-3 py-1 rounded ${cfg
+              .accent.buttonHover} transition"
           >
             Reload
           </button>
-          <a class="underline text-emerald-700" href="https://satellite.local"
-            >satellite.local</a
+          <a
+            class="underline ${cfg.accent.link}"
+            href="https://${cfg.hosts.satellite}"
+            >${cfg.hosts.satellite}</a
           >
-          <a class="underline text-emerald-700" href="https://api.primary.local"
-            >api.primary.local</a
+          <a
+            class="underline ${cfg.accent.link}"
+            href="https://${cfg.hosts.api}"
+            >${cfg.hosts.api}</a
           >
         </div>
       </div>
 
-      <!-- Split panes: Request (left) | Response (right) with draggable divider -->
+      <!-- Split panes: Request (left) | Response (top-right) + Iframe (bottom-right) with draggable dividers -->
       <div
         id="split"
-        class="flex h-[70vh] min-h-[480px] border border-neutral-200 rounded-md overflow-hidden bg-white"
+        class="relative flex min-h-[480px] border border-neutral-200 overflow-hidden bg-white"
       >
         <!-- Left: Request -->
         <section
@@ -154,63 +123,147 @@ app.get("/", (c) => {
           class="w-[6px] bg-neutral-200 hover:bg-neutral-300 cursor-col-resize"
         ></div>
 
-        <!-- Right: Response -->
-        <section id="paneR" class="flex-1 overflow-auto">
-          <header
-            class="px-4 py-2 bg-neutral-50 border-b border-neutral-200 text-neutral-700 text-sm"
-          >
-            Response
-          </header>
-          <div class="p-3 space-y-3">
-            <div>
-              <div
-                class="text-[11px] uppercase tracking-wide text-neutral-500 mb-1"
-              >
-                Headers
-              </div>
-              ${KVTable({ "Set-Cookie": setCookiePreview })}
-            </div>
-            <div
-              class="relative before:content-['iframe'] before:absolute before:top-0 before:right-0 before:bg-neutral-100 before:text-neutral-500 before:px-2 before:py-1"
+        <!-- Right column: Response (top) + Iframe (bottom) -->
+        <section id="paneR" class="flex-1 flex flex-col min-w-[300px]">
+          <!-- Top: Response -->
+          <div id="paneRTop" class="basis-2/3 min-h-[160px] overflow-auto">
+            <header
+              class="px-4 py-2 bg-neutral-50 border-b border-neutral-200 text-neutral-700 text-sm"
             >
-              <iframe
-                src="https://satellite.local"
-                class="w-full h-72 border border-neutral-300 rounded-md"
-              ></iframe>
+              Response
+            </header>
+            <div class="p-3 space-y-3">
+              <div>
+                <div
+                  class="text-[11px] uppercase tracking-wide text-neutral-500 mb-1"
+                >
+                  Headers
+                </div>
+                ${KVTable({ "Set-Cookie": setCookiePreview })}
+              </div>
             </div>
           </div>
+
+          <!-- Horizontal Divider -->
+          <div
+            id="dividerY"
+            class="h-[6px] bg-neutral-200 hover:bg-neutral-300 cursor-row-resize"
+          ></div>
+
+          <!-- Bottom: Iframe -->
+          <div
+            id="paneRBottom"
+            class="flex-1 min-h-[160px] overflow-hidden relative"
+          >
+            <span
+              class="absolute top-0 right-0 m-2 px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase bg-orange-500 text-white"
+              >Iframe</span
+            >
+            <iframe
+              src="https://${cfg.hosts.satellite}"
+              class="w-full h-full border-2 border-orange-500 shadow-sm"
+            ></iframe>
+          </div>
         </section>
+        <!-- Intersection handle: drag diagonally to resize both X and Y -->
+        <div
+          id="dividerXY"
+          class="absolute w-3 h-3 -ml-1.5 -mt-1.5 bg-neutral-300 hover:bg-neutral-400 shadow cursor-nwse-resize z-10"
+          style="left: 50%; top: 50%"
+        ></div>
       </div>
 
       <script>
-        // Simple drag-to-resize between left and right panes
+        // Drag-to-resize: vertical (X), horizontal (Y), and intersection (both)
         (function () {
           const split = document.getElementById("split");
+          const header = document.getElementById("pageHeader");
           const left = document.getElementById("paneL");
           const divider = document.getElementById("divider");
-          if (!split || !left || !divider) return;
-          let dragging = false;
+          const right = document.getElementById("paneR");
+          const rTop = document.getElementById("paneRTop");
+          const rBottom = document.getElementById("paneRBottom");
+          const dividerY = document.getElementById("dividerY");
+          const dividerXY = document.getElementById("dividerXY");
+          if (
+            !split ||
+            !left ||
+            !divider ||
+            !right ||
+            !rTop ||
+            !rBottom ||
+            !dividerY ||
+            !dividerXY
+          )
+            return;
+          let draggingX = false;
+          let draggingY = false;
+
+          const layout = () => {
+            const headerH = header?.getBoundingClientRect().height ?? 0;
+            const topPad = 16; // p-4
+            const gapY = 12; // space-y-3 approx
+            const vertical = headerH + topPad + gapY + 2; // include border thickness
+            const h = Math.max(320, window.innerHeight - vertical);
+            split.style.height = h + "px";
+            positionIntersection();
+          };
+
+          const positionIntersection = () => {
+            const rectSplit = split.getBoundingClientRect();
+            const rectLeft = left.getBoundingClientRect();
+            const rectTop = rTop.getBoundingClientRect();
+            const rectDivX = divider.getBoundingClientRect();
+            const rectDivY = dividerY.getBoundingClientRect();
+            const x = rectLeft.right - rectSplit.left + rectDivX.width / 2;
+            const y = rectTop.bottom - rectSplit.top + rectDivY.height / 2;
+            dividerXY.style.left = x + "px";
+            dividerXY.style.top = y + "px";
+          };
 
           const onMouseMove = (e) => {
-            if (!dragging) return;
-            const rect = split.getBoundingClientRect();
-            const min = 220; // px
-            const max = rect.width * 0.8; // 80%
-            let newW = e.clientX - rect.left;
-            if (newW < min) newW = min;
-            if (newW > max) newW = max;
-            left.style.flexBasis = newW + "px";
+            if (draggingX) {
+              const rect = split.getBoundingClientRect();
+              const min = 220; // px
+              const max = rect.width * 0.8; // 80%
+              let newW = e.clientX - rect.left;
+              if (newW < min) newW = min;
+              if (newW > max) newW = max;
+              left.style.flexBasis = newW + "px";
+            }
+            if (draggingY) {
+              const rectR = right.getBoundingClientRect();
+              const minH = 120; // px per pane
+              let newTop = e.clientY - rectR.top; // inside right column
+              if (newTop < minH) newTop = minH;
+              if (newTop > rectR.height - minH) newTop = rectR.height - minH;
+              rTop.style.flexBasis = newTop + "px";
+            }
+            if (draggingX || draggingY) positionIntersection();
           };
 
           divider.addEventListener("mousedown", () => {
-            dragging = true;
+            draggingX = true;
+            document.body.classList.add("select-none");
+          });
+          dividerY.addEventListener("mousedown", () => {
+            draggingY = true;
+            document.body.classList.add("select-none");
+          });
+          dividerXY.addEventListener("mousedown", () => {
+            draggingX = true;
+            draggingY = true;
             document.body.classList.add("select-none");
           });
           window.addEventListener("mousemove", onMouseMove);
           window.addEventListener("mouseup", () => {
-            dragging = false;
+            draggingX = false;
+            draggingY = false;
             document.body.classList.remove("select-none");
+            positionIntersection();
           });
+          window.addEventListener("resize", layout);
+          layout();
         })();
       </script>
     </body>
